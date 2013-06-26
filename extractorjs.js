@@ -28,6 +28,13 @@ var folder = Folder(sourceFilePath + sourceFileName);
 if (!folder.exists)
     folder.create();
 
+// Crop parameters
+var cropLoc = 
+{
+    "horizontal": "center", // left|center|right
+    "vertical": "center" // top|center|bottom
+};
+
 // Saving some settings
 var originalUnits = preferences.rulerUnits;
 
@@ -56,6 +63,7 @@ function main()
 
     var jsonObject = 
     {
+        "crop" : cropLoc,
         "dimensions": dimensions,
         "foreground": new Array(),
         "background": new Array()
@@ -88,6 +96,11 @@ function main()
             jsonObject[fileName].push(jsonData);
             saveLayer(activeLayer, fileName);
         }
+        else if (activeLayer.name == "important")
+        {
+            var newCrop = determineCrop(activeLayer);
+            jsonObject["crop"] = newCrop;
+        }
         else if (activeLayer.name != "background") 
         {
             var fileName = "foreground" + i;
@@ -95,7 +108,7 @@ function main()
             jsonObject.foreground.push(jsonData);
             saveLayer(activeLayer, fileName);
         }
-        else 
+        else
         {
             var fileName = "background";
             jsonData["file"] = fileName + ".png";
@@ -206,6 +219,35 @@ function layerData(lay)
     return dataObject;
 }
 
+function determineCrop(lay)
+{
+    var bounds = lay.bounds;
+    var width = bounds[2].value - bounds[0].value;
+    var height = bounds[3].value - bounds[1].value;
+    var fromLeft = bounds[0].value;
+    var fromTop = bounds[1].value;
+    var fromRight = doc.width.value - bounds[2].value;
+    var fromBottom = doc.height.value - bounds[3].value;
+    var leftRight = Math.abs(fromRight - fromLeft);
+    var topBottom = Math.abs(fromBottom - fromTop);
+    var rowMiddle = (leftRight <= width / 2);
+    var colMiddle = (topBottom <= height / 2);
+    var cropObj = {}
+    if (rowMiddle)
+        cropObj["horizontal"] = "center";
+    else if (fromLeft > fromRight)
+        cropObj["horizontal"] = "right";
+    else
+        cropObj["horizontal"] = "left";
+    if (colMiddle)
+        cropObj["vertical"] = "center";
+    else if (fromTop > fromBottom)
+        cropObj["vertical"] = "bottom";
+    else
+        cropObj["vertical"] = "top";
+    return cropObj;
+}
+
 // determines the snap location
 // based on input coordinates of the item
 function snapLocation(width, height, left, top, right, bottom)
@@ -214,7 +256,6 @@ function snapLocation(width, height, left, top, right, bottom)
     var topBottom = Math.abs(bottom - top);
     var rowMiddle = (leftRight <= width / 2);
     var colMiddle = (topBottom <= height / 2);
-    //alert("top: " + top + " bottom: " + bottom + " leftRight: " + leftRight + " topBottom: " + topBottom + " rowMiddle: " + rowMiddle + " colMiddle: " + colMiddle);
     if (rowMiddle && colMiddle)
         return "snapToMiddle";
     if (rowMiddle)
