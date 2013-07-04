@@ -41,8 +41,15 @@ var originalUnits = preferences.rulerUnits;
 // Fire off main function
 // Suspending time (we are frozen in time!!)
 var doc = activeDocument;
+var visibleLayers = new Array();
+var dimensions = 
+{
+    "width": doc.width.value,
+    "height": doc.height.value
+};
+var history = doc.activeHistoryState;
 doc.suspendHistory("exportLayers", "main();");
-doc.activeHistoryState = doc.historyStates[0]
+doc.activeHistoryState = history;
 
 function main()
 {
@@ -55,12 +62,6 @@ function main()
 
     preferences.rulerUnits = Units.PIXELS;
 
-    var dimensions = 
-    {
-        "width": doc.width.value,
-        "height": doc.height.value
-    };
-
     var jsonObject = 
     {
         "crop" : cropLoc,
@@ -72,18 +73,20 @@ function main()
     // Rasterize all layers
     // and crop out anything thats not
     // in the actual canvas
-    cropAndRasterize();
+    cropAndRasterize(doc);
 
     // Merge and flatten all linked layers
-    mergeLinked();
+    mergeLinked(doc);
+
+    getLayers(doc);
 
     // Now we loop through each layer
     // and save each one out
     // and get its data
-    var len = doc.layers.length;
+    var len = visibleLayers.length;
     for (var i = 0; i < len; i++)
     {
-        var activeLayer = doc.layers[i];
+        var activeLayer = visibleLayers[i];
         if (isEmpty(activeLayer) || !activeLayer.visible)
             continue;
         var jsonData = layerData(activeLayer);
@@ -101,18 +104,18 @@ function main()
             var newCrop = determineCrop(activeLayer);
             jsonObject["crop"] = newCrop;
         }
-        else if (activeLayer.name != "background") 
+        else if (activeLayer.name.match(/^*background*/))
         {
-            var fileName = "foreground" + i;
+            var fileName = activeLayer.name;
             jsonData["file"] = fileName + ".png";
-            jsonObject.foreground.push(jsonData);
+            jsonObject.background.push(jsonData);
             saveLayer(activeLayer, fileName);
         }
         else
         {
-            var fileName = "background";
+            var fileName = "foreground" + i;
             jsonData["file"] = fileName + ".png";
-            jsonObject.background.push(jsonData);
+            jsonObject.foreground.push(jsonData);
             saveLayer(activeLayer, fileName);
         }
     }
@@ -122,6 +125,28 @@ function main()
 
     // Restoring original settings
     preferences.rulerUnits = originalUnits;
+}
+
+function getLayers(parent)
+{
+    // creates an array of all visible layers
+    // pull them out of their groups
+    var len = parent.layers.length;
+    for (var i = 0; i < len; i++)
+    {
+        var layer = parent.layers[i];
+        if (layer.visible)
+        {
+            if (layer.typename == "LayerSet")
+            {
+                getLayers(layer);
+            }
+            else
+            {
+                visibleLayers.push(layer);
+            }
+        }
+    }
 }
 
 function contains(item, arr)
@@ -140,19 +165,23 @@ function contains(item, arr)
 // used to merge linked layers into a single layer
 // lots of work around to bypass javascript's
 // inherent asynch
-function mergeLinked()
+function mergeLinked(parent)
 {
     var set = []
-    var len = doc.layers.length;
+    var len = parent.layers.length;
     var i = 0;
     while (i < len)
     {
-        var layer = doc.layers[i];
-        if (layer.linkedLayers.length > 0)
+        var layer = parent.layers[i];
+        if (layer.typename == "LayerSet" && layer.visible)
+        {
+            mergeLinked(layer)
+        }
+        else if (layer.linkedLayers.length > 0)
         {
             if (!contains(layer, set))
             {
-                var newSet = doc.layerSets.add();
+                var newSet = parent.layerSets.add();
                 for (var n = 0, nlen = layer.linkedLayers.length; n < nlen + 1; n++)
                 {
                     if (n == nlen)
@@ -173,24 +202,30 @@ function mergeLinked()
                 }
             }
         }
-        len = doc.layers.length;
+        len = parent.layers.length;
         i = i + 1;
     }
 }
 
-function cropAndRasterize()
+function cropAndRasterize(docu)
 {
-    var len = doc.layers.length;
-    var selection = doc.selection.selectAll();
+    var len = docu.layers.length;
     for (var i = 0; i < len; i++) 
     {
-        var layer = doc.layers[i];
+        var layer = docu.layers[i];
         // Rasterize the layer first
         if (layer.visible) 
         {
-            doc.activeLayer = layer;
-            doc.activeLayer.rasterize(RasterizeType.ENTIRELAYER);
-            doc.crop(new Array(0,0,doc.width.value,doc.height.value));
+            if (layer.typename == "LayerSet")
+            {
+                cropAndRasterize(layer);
+            }
+            else
+            {
+                doc.activeLayer = layer;
+                doc.activeLayer.rasterize(RasterizeType.ENTIRELAYER);
+                doc.crop(new Array(0,0,doc.width.value,doc.height.value));
+            }
         }
     }
 }
@@ -216,6 +251,10 @@ function layerData(lay)
        "fromRight": fromRight,
        "fromBottom": fromBottom
     };
+    if (lay.name.match(/^*background*/))
+    {
+        dataObject["ratio"] = (width / height);
+    }
     return dataObject;
 }
 
@@ -230,21 +269,15 @@ function determineCrop(lay)
     var fromBottom = doc.height.value - bounds[3].value;
     var leftRight = Math.abs(fromRight - fromLeft);
     var topBottom = Math.abs(fromBottom - fromTop);
-    var rowMiddle = (leftRight <= width / 2);
-    var colMiddle = (topBottom <= height / 2);
+    var rowMiddle = (leftRight < (width / 5));
+    var colMiddle = (topBottom < (height / 5));
     var cropObj = {}
-    if (rowMiddle)
-        cropObj["horizontal"] = "center";
-    else if (fromLeft > fromRight)
-        cropObj["horizontal"] = "right";
-    else
-        cropObj["horizontal"] = "left";
-    if (colMiddle)
-        cropObj["vertical"] = "center";
-    else if (fromTop > fromBottom)
-        cropObj["vertical"] = "bottom";
-    else
-        cropObj["vertical"] = "top";
+    var topBottomCenter = (height / 2) + fromTop;
+    var leftRightCenter = (width / 2) + fromLeft;
+    var fromLeftPercent = (leftRightCenter / dimensions.width * 100) + "%";
+    var fromTopPercent = (topBottomCenter / dimensions.height * 100) + "%";
+    cropObj["horizontal"] = fromLeftPercent;
+    cropObj["vertical"] = fromTopPercent;
     return cropObj;
 }
 
