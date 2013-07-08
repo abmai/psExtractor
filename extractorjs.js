@@ -111,6 +111,13 @@ function main()
             jsonObject.background.push(jsonData);
             saveLayer(activeLayer, fileName);
         }
+        else if (activeLayer.name == "blurred")
+        {
+            var fileName = activeLayer.name;
+            jsonData["file"] = fileName + ".png";
+            jsonObject["blurred"] = jsonData;
+            saveLayer(activeLayer, fileName);
+        }
         else
         {
             var fileName = "foreground" + i;
